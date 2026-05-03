@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import type { App, Rating } from '@/lib/types';
 
 const RATING_CONFIG: Record<Rating, { label: string; bg: string; text: string; dot: string; activeBorder: string }> = {
@@ -10,7 +10,8 @@ const RATING_CONFIG: Record<Rating, { label: string; bg: string; text: string; d
 };
 
 const RATINGS: Rating[] = ['great', 'good', 'bad'];
-const emptyForm = { name: '', description: '', url: '', rating: 'good' as Rating };
+const ALL_TAGS = ['AI', 'Dev Tools', 'Productivity', 'Finance', 'Design', 'Fun'];
+const emptyForm = { name: '', description: '', url: '', rating: 'good' as Rating, tags: [] as string[] };
 
 export default function StorePage() {
   const [apps, setApps] = useState<App[]>([]);
@@ -31,6 +32,10 @@ export default function StorePage() {
   const [screenshotUrl, setScreenshotUrl] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
 
+  // Search + filter
+  const [search, setSearch] = useState('');
+  const [activeTag, setActiveTag] = useState<string | null>(null);
+
   const headers = { 'Content-Type': 'application/json', 'x-admin-password': password };
 
   const load = () =>
@@ -38,7 +43,6 @@ export default function StorePage() {
 
   useEffect(() => { load(); }, []);
 
-  // Restore admin session
   useEffect(() => {
     const saved = sessionStorage.getItem('admin_pw');
     if (saved) { setPassword(saved); setAdminMode(true); }
@@ -51,7 +55,6 @@ export default function StorePage() {
       body: JSON.stringify({ name: '__auth_check__' }),
     });
     if (res.status === 401) { setAuthError('Wrong password.'); return; }
-    // clean up the test entry
     const data = await res.json();
     if (data.id) {
       await fetch(`/api/apps/${data.id}`, { method: 'DELETE', headers: { 'x-admin-password': pw } });
@@ -72,7 +75,6 @@ export default function StorePage() {
     setScreenshotUrl('');
   };
 
-  // File upload
   const handleFileUpload = async (file: File) => {
     setUploading(true);
     const fd = new FormData();
@@ -84,7 +86,6 @@ export default function StorePage() {
     else setFormError(data.error || 'Upload failed');
   };
 
-  // Save app
   const save = async () => {
     setSaving(true);
     setFormError('');
@@ -108,7 +109,7 @@ export default function StorePage() {
 
   const startEdit = (app: App) => {
     setEditId(app.id);
-    setForm({ name: app.name, description: app.description || '', url: app.url || '', rating: app.rating || 'good' });
+    setForm({ name: app.name, description: app.description || '', url: app.url || '', rating: app.rating || 'good', tags: app.tags ?? [] });
     setScreenshotUrl(app.screenshot_url || '');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -123,6 +124,29 @@ export default function StorePage() {
     setApps((prev) => prev.map((a) => a.id === id ? { ...a, rating } : a));
     await fetch(`/api/apps/${id}`, { method: 'PATCH', headers, body: JSON.stringify({ rating }) });
   };
+
+  const toggleFormTag = (tag: string) => {
+    setForm((f) => ({
+      ...f,
+      tags: f.tags.includes(tag) ? f.tags.filter((t) => t !== tag) : [...f.tags, tag],
+    }));
+  };
+
+  // All tags that exist across loaded apps (for filter pills)
+  const existingTags = useMemo(() => {
+    const set = new Set<string>();
+    apps.forEach((a) => (a.tags ?? []).forEach((t) => set.add(t)));
+    return Array.from(set).sort();
+  }, [apps]);
+
+  const filtered = useMemo(() => {
+    return apps.filter((a) => {
+      const q = search.toLowerCase();
+      const matchesSearch = !q || a.name.toLowerCase().includes(q) || (a.description ?? '').toLowerCase().includes(q);
+      const matchesTag = !activeTag || (a.tags ?? []).includes(activeTag);
+      return matchesSearch && matchesTag;
+    });
+  }, [apps, search, activeTag]);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -223,6 +247,27 @@ export default function StorePage() {
                 </div>
               </div>
 
+              {/* Tags */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 mb-1.5">Tags</label>
+                <div className="flex gap-2 flex-wrap">
+                  {ALL_TAGS.map((tag) => (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => toggleFormTag(tag)}
+                      className={`px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${
+                        form.tags.includes(tag)
+                          ? 'bg-gray-900 text-white border-gray-900'
+                          : 'border-gray-200 text-gray-400 hover:border-gray-400'
+                      }`}
+                    >
+                      {tag}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               {/* Rating picker */}
               <div className="flex gap-2 flex-wrap">
                 {RATINGS.map((r) => {
@@ -259,6 +304,41 @@ export default function StorePage() {
           </div>
         )}
 
+        {/* Search + tag filters */}
+        {!loading && apps.length > 0 && (
+          <div className="mb-6 space-y-3">
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search apps…"
+              className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm outline-none focus:border-gray-400 bg-white"
+            />
+            {existingTags.length > 0 && (
+              <div className="flex gap-2 flex-wrap">
+                <button
+                  onClick={() => setActiveTag(null)}
+                  className={`px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${
+                    !activeTag ? 'bg-gray-900 text-white border-gray-900' : 'border-gray-200 text-gray-500 hover:border-gray-400'
+                  }`}
+                >
+                  All
+                </button>
+                {existingTags.map((tag) => (
+                  <button
+                    key={tag}
+                    onClick={() => setActiveTag(activeTag === tag ? null : tag)}
+                    className={`px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${
+                      activeTag === tag ? 'bg-gray-900 text-white border-gray-900' : 'border-gray-200 text-gray-500 hover:border-gray-400'
+                    }`}
+                  >
+                    {tag}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* App grid */}
         {loading && <div className="text-center text-gray-400 py-20 text-sm">Loading apps…</div>}
 
@@ -266,9 +346,13 @@ export default function StorePage() {
           <div className="text-center text-gray-400 py-20 text-sm">No apps yet.</div>
         )}
 
-        {!loading && apps.length > 0 && (
+        {!loading && filtered.length === 0 && apps.length > 0 && (
+          <div className="text-center text-gray-400 py-20 text-sm">No apps match your search.</div>
+        )}
+
+        {!loading && filtered.length > 0 && (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
-            {apps.map((app) => {
+            {filtered.map((app) => {
               const rating = app.rating ? RATING_CONFIG[app.rating] : null;
               return (
                 <div key={app.id} className="bg-white rounded-2xl border border-gray-200 overflow-hidden shadow-sm hover:shadow-md transition-shadow flex flex-col">
@@ -281,7 +365,6 @@ export default function StorePage() {
                   <div className="p-4 sm:p-5 flex flex-col flex-1">
                     <div className="flex items-start justify-between gap-2 mb-2">
                       <h2 className="font-bold text-base leading-snug">{app.name}</h2>
-                      {/* Rating — clickable in admin mode */}
                       {adminMode ? (
                         <div className="flex gap-1 shrink-0">
                           {RATINGS.map((r) => {
@@ -308,6 +391,15 @@ export default function StorePage() {
                     </div>
 
                     {app.description && <p className="text-sm text-gray-500 leading-relaxed flex-1">{app.description}</p>}
+
+                    {/* Tags */}
+                    {(app.tags ?? []).length > 0 && (
+                      <div className="flex gap-1.5 flex-wrap mt-2">
+                        {app.tags.map((tag) => (
+                          <span key={tag} className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 text-xs font-medium">{tag}</span>
+                        ))}
+                      </div>
+                    )}
 
                     <div className="mt-4 flex gap-2">
                       {app.url && (

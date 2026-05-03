@@ -7,5 +7,6 @@ export interface App {
   url: string | null;
   screenshot_url: string | null;
   rating: Rating | null;
+  tags: string[];
   created_at: string;
 }
